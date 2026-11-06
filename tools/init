@@ -59,9 +59,7 @@ def collect(selected_agent=None):
     name = ask('App name', validate=lambda value: len(value) <= 80 and value.isprintable())
     platform = choice('Target platforms', {'both': 'iOS and Android', 'ios': 'iOS only', 'android': 'Android only'}, 'both')
     identifier = ask('Application identifier (e.g. com.example.myapp)', validate=valid_id)
-    start = choice('Starting experience', {'minimal': 'Hello World, Next screen, native Back', 'custom': 'Describe your own'}, 'minimal')
-    experience = ('Home shows Hello World. Next opens a second screen with a greeting. Native Back returns to Home.'
-                  if start == 'minimal' else ask('Describe the starting experience'))
+    experience = 'A single native screen displaying Hello World.'
     options = {key: f'{label} ({shutil.which(binary) or "not found on PATH"})'
                for key, (label, binary) in ADAPTERS.items()}
     agent = selected_agent or choice('Coding agent CLI (must already be installed and signed in)', options)
@@ -107,7 +105,7 @@ def prompt():
         'its role file, specs, and customizations. All platform implementation and troubleshooting '
         'belongs to its respective agent. Check delegation first: if unavailable, report the '
         'blocker and provide separate-session task briefs instead of implementing platform code yourself. '
-        'Check prerequisites, create minimal native projects matching the chosen experience, '
+        'Check prerequisites, create minimal native projects matching the saved starting_experience, '
         'coordinate reproducible build/run tools, and verify each selected platform. '
         'Resume unfinished work rather than regenerate existing projects. Report build, launch, '
         'and interaction evidence separately. Do not install system software, commit, or push automatically.'

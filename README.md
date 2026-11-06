@@ -17,7 +17,8 @@ cd my-app
 ./tools/init
 ```
 
-Answer questions about your app, platforms, identifier, and starting experience.
+Answer questions about your app name, platforms, and application identifier.
+New projects start with a single native screen displaying Hello World.
 Choose an agent; Cross Native saves your answers and launches it in the project
 directory to coordinate native setup. Delegation depends on your agent environment.
 

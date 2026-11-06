@@ -42,7 +42,7 @@ class InitTests(unittest.TestCase):
         for agent, binary in [('codex', 'codex'), ('claude', 'claude'), ('cursor', 'agent')]:
             with self.subTest(agent=agent):
                 self.fake_agent(binary)
-                result = self.invoke('--agent', agent, answers='Garden\nboth\ncom.example.garden\nminimal\ncodex\n', cwd=self.bin)
+                result = self.invoke('--agent', agent, answers='Garden\nboth\ncom.example.garden\n', cwd=self.bin)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 record = json.loads((self.root / 'record.json').read_text())
                 self.assertEqual(record['cwd'], str(self.root))
@@ -54,10 +54,12 @@ class InitTests(unittest.TestCase):
                     self.assertEqual(record['args'][:2], ['--workspace', str(self.root)])
 
     def test_validation_save_and_resume_preserve_project(self):
-        result = self.invoke('--no-launch', answers='Garden\nwrong\nandroid\ninvalid-id\ncom.example.garden\nminimal\nclaude\n')
+        result = self.invoke('--no-launch', answers='Garden\nwrong\nandroid\ninvalid-id\ncom.example.garden\nclaude\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads((self.root / '.cross-native/project.json').read_text())
         self.assertEqual(config['platforms'], ['android'])
+        self.assertEqual(config['starting_experience'], 'A single native screen displaying Hello World.')
+        self.assertNotIn('Starting experience', result.stdout)
         (self.root / 'android').mkdir()
         source = self.root / 'android/keep.kt'
         source.write_text('developer work')
@@ -68,7 +70,7 @@ class InitTests(unittest.TestCase):
         self.assertFalse((self.root / 'ios').exists())
 
     def test_missing_agent_saves_answers_for_retry(self):
-        result = self.invoke(answers='Garden\nios\ncom.example.garden\nminimal\ncodex\n')
+        result = self.invoke(answers='Garden\nios\ncom.example.garden\ncodex\n')
         self.assertEqual(result.returncode, 1)
         self.assertIn('not found on PATH', result.stderr)
         self.assertTrue((self.root / '.cross-native/project.json').is_file())
@@ -90,7 +92,7 @@ class InitTests(unittest.TestCase):
         path = self.bin / 'codex'
         path.write_text(f'#!{sys.executable}\nraise SystemExit(7)\n')
         path.chmod(0o755)
-        result = self.invoke(answers='Garden\nios\ncom.example.garden\nminimal\ncodex\n')
+        result = self.invoke(answers='Garden\nios\ncom.example.garden\ncodex\n')
         self.assertEqual(result.returncode, 7)
 
 

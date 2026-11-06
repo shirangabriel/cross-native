@@ -27,9 +27,10 @@ Ask only for missing information; reuse existing recorded answers on resume.
 | App display name | Required; no assumed demo name |
 | Target platforms | Offer iOS and Android, or either individually |
 | Application identifier | Required reverse-domain identifier; validate for each selected platform |
-| Starting experience | Minimal app: Home, Hello World, Next, second screen, native Back |
 
-Offer a custom starting experience. Apply default role behavior plus developer
+New projects default to a single native screen displaying Hello World; do not ask
+a starting-point question. Preserve starting_experience in previously saved
+configurations when resuming. Apply default role behavior plus developer
 extensions and explicit overrides. Ask about consequential choices only when
 requirements or conflicting instructions leave them unresolved. Do not require
 developers to configure agent internals to initialize an app.
