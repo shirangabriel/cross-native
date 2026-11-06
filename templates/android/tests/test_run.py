@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -38,6 +39,90 @@ class SelectionTests(unittest.TestCase):
         with patch.object(run, 'sdk_tool', return_value='emulator'):
             with self.assertRaisesRegex(RuntimeError, 'Pixel_1, Pixel_2'):
                 run.select_device(Fake(), None, None, 1)
+
+    def test_boot_query_timeout_retries_same_serial_until_ready(self):
+        calls = []
+        clock = [0.0]
+        class Fake:
+            def device(self, serial, *args, timeout):
+                calls.append((serial, args, timeout))
+                if len(calls) == 1:
+                    clock[0] += timeout
+                    raise subprocess.TimeoutExpired('adb', timeout)
+                return '1\n'
+        with patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            run.wait_boot(Fake(), 'emulator-5554', 30)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call[0] == 'emulator-5554' for call in calls))
+
+    def test_boot_deadline_caps_queries_and_fails(self):
+        timeouts = []
+        clock = [0.0]
+        class Fake:
+            def device(self, serial, *args, timeout):
+                timeouts.append(timeout)
+                clock[0] += timeout
+                raise subprocess.TimeoutExpired('adb', timeout)
+        with patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaisesRegex(RuntimeError, 'Timed out after 15s.*emulator-5554.*cold boot'):
+                run.wait_boot(Fake(), 'emulator-5554', 15)
+        self.assertEqual(timeouts, [10, 4])
+        self.assertEqual(clock[0], 15)
+
+    def test_boot_temporarily_offline_then_not_booted_then_ready(self):
+        answers = iter([RuntimeError('device offline'), '', '1'])
+        clock = [0.0]
+        class Fake:
+            def device(self, serial, *args, timeout):
+                answer = next(answers)
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+        with patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            run.wait_boot(Fake(), 'emulator-5554', 5)
+        self.assertEqual(clock[0], 2)
+
+    def test_boot_deadline_returns_failed_launch_without_install(self):
+        clock = [0.0]
+        calls = []
+        class FakeRunner:
+            def __init__(self, adb, evidence):
+                pass
+            def device(self, serial, *args, timeout):
+                calls.append(args)
+                clock[0] += timeout
+                raise subprocess.TimeoutExpired('adb', timeout)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / 'app/build/outputs/apk/debug/app-debug.apk'
+            apk.parent.mkdir(parents=True)
+            apk.touch()
+            with patch.object(run, 'APP_ID', 'com.example.app'), \
+                    patch.object(run, 'sdk_tool', return_value='adb'), \
+                    patch.object(run, 'Runner', FakeRunner), \
+                    patch.object(run, 'select_device', return_value='emulator-5554'), \
+                    patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                self.assertEqual(run.launch(root, timeout=15), 1)
+            report = json.loads((root / 'build/evidence/launch.json').read_text())
+            self.assertEqual(report['status'], 'failed')
+            self.assertIn('Timed out after 15s', report['error'])
+            self.assertTrue(all(args == ('shell', 'getprop', 'sys.boot_completed') for args in calls))
+            self.assertFalse((root / 'build/evidence/screenshot.png').exists())
+
+    def test_timed_out_command_is_recorded_in_evidence(self):
+        evidence = {'commands': []}
+        runner = run.Runner('adb', evidence)
+        error = subprocess.TimeoutExpired(['adb'], 3, output=b'partial', stderr=b'busy')
+        with patch.object(run.subprocess, 'run', side_effect=error):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                runner.device('emulator-5554', 'shell', 'getprop', timeout=3)
+        self.assertEqual(evidence['commands'][0]['timeout_seconds'], 3)
+        self.assertEqual(evidence['commands'][0]['stdout'], 'partial')
+        self.assertEqual(evidence['commands'][0]['argv'][:3], ['adb', '-s', 'emulator-5554'])
 
     def test_modern_window_subdump_has_no_foreground_fields(self):
         # Reduced from the user's captured Android window-windows output.

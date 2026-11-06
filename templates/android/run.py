@@ -36,7 +36,15 @@ class Runner:
         self.evidence = evidence
 
     def command(self, args, timeout=30, binary=False):
-        result = subprocess.run(args, capture_output=True, timeout=timeout)
+        try:
+            result = subprocess.run(args, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            def text(value):
+                return value.decode(errors='replace') if isinstance(value, bytes) else value or ''
+            self.evidence['commands'].append({'argv': args, 'timeout_seconds': timeout,
+                                             'stdout': '<binary>' if binary else text(exc.stdout),
+                                             'stderr': text(exc.stderr)})
+            raise
         output = result.stdout if binary else result.stdout.decode(errors='replace')
         stderr = result.stderr.decode(errors='replace')
         self.evidence['commands'].append({'argv': args, 'exit_code': result.returncode,
@@ -114,11 +122,32 @@ def select_device(runner, requested, root, timeout):
 
 def wait_boot(runner, serial, timeout):
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if runner.device(serial, 'shell', 'getprop', 'sys.boot_completed', timeout=10).strip() == '1':
-            return
-        time.sleep(1)
-    raise RuntimeError(f'Timed out waiting for Android boot on {serial}.')
+    last_result = 'no response'
+    announced_retry = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            value = runner.device(serial, 'shell', 'getprop', 'sys.boot_completed',
+                                  timeout=min(10, remaining)).strip()
+            if value == '1':
+                return
+            last_result = f'sys.boot_completed={value!r}'
+        except subprocess.TimeoutExpired:
+            last_result = 'ADB boot-property query timed out'
+        except RuntimeError as exc:
+            # An emulator may temporarily go offline while its shell starts.
+            last_result = str(exc)
+        if not announced_retry:
+            print(f'Waiting for Android boot on {serial} (up to {timeout}s)…', flush=True)
+            announced_retry = True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1, remaining))
+    raise RuntimeError(f'Timed out after {timeout}s waiting for Android boot on {serial}. '
+                       f'Last result: {last_result}. Check that emulator in Device Manager; '
+                       f'if it is stuck, cold boot it and retry. No app was installed by this attempt.')
 
 
 def foreground_matches(text, package, activity, fields):

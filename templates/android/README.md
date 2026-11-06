@@ -68,6 +68,10 @@ SDK locations, or PATH. It automatically selects a single running emulator. Mult
 running emulators require a serial. When none is running, a single installed AVD
 can be started automatically; otherwise choose an AVD by name. New emulator boot
 is pinned to an available port and awaited with a bounded timeout (default 180s).
+Boot-property queries retry transient ADB timeouts/offline responses within that
+deadline; each query is capped at 10 seconds or the remaining time. Timed-out
+commands are retained in launch evidence. An exhausted deadline fails with the
+selected serial and recovery guidance; no global ADB restart is performed.
 Physical devices require an explicit serial via --device or ANDROID_SERIAL and
 must already be authorized. Every install, launch, and capture targets the same serial.
 
