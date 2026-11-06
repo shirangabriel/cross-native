@@ -172,17 +172,67 @@ def foreground_matches(text, package, activity, fields):
     return None
 
 
-def foreground_app(runner, serial, package, activity):
+def foreground_app(runner, serial, package, activity, deadline=None):
     # `window windows` omits display focus on recent Android releases. The full
     # dump includes mCurrentFocus/mFocusedApp; activity state is a fallback only
     # when those fields are unavailable, never when another window has focus.
-    window = runner.device(serial, 'shell', 'dumpsys', 'window')
+    def query(*args):
+        if deadline is None:
+            return runner.device(serial, *args)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('Foreground verification deadline exhausted.')
+        return runner.device(serial, *args, timeout=min(5, remaining))
+
+    window = query('shell', 'dumpsys', 'window')
     match = foreground_matches(window, package, activity, ('mCurrentFocus', 'mFocusedApp'))
     if match is not None:
         return match, 'window'
-    activities = runner.device(serial, 'shell', 'dumpsys', 'activity', 'activities')
+    activities = query('shell', 'dumpsys', 'activity', 'activities')
     return (foreground_matches(activities, package, activity,
                                ('topResumedActivity', 'mResumedActivity')) is True, 'activity')
+
+
+def start_activity(runner, serial, evidence, timeout=60):
+    """Start once, then prove foreground identity within a shared deadline.
+
+    `am start -W` can remain waiting after delivery of the launch intent. A host
+    timeout is not success or failure evidence about the app itself.
+    """
+    deadline = time.monotonic() + timeout
+    try:
+        result = runner.device(serial, 'shell', 'am', 'start', '-W', '-n',
+                               f'{APP_ID}/{ACTIVITY}', timeout=min(30, timeout))
+        if re.search(r'(^|\n)\s*(Error|Exception)', result) or 'Status: ok' not in result:
+            raise RuntimeError('Activity launch failed: ' + result)
+        evidence['start_command_status'] = 'completed'
+    except subprocess.TimeoutExpired as exc:
+        partial = exc.stdout or ''
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors='replace')
+        if re.search(r'(^|\n)\s*(Error|Exception)', partial):
+            raise RuntimeError('Activity launch failed: ' + partial)
+        evidence['start_command_status'] = 'timed_out'
+        print('Android start wait timed out; checking the requested activity on the same device…', flush=True)
+    last_result = 'requested activity is not foreground'
+    while time.monotonic() < deadline:
+        try:
+            focused, source = foreground_app(runner, serial, APP_ID, ACTIVITY, deadline=deadline)
+            if focused:
+                evidence['foreground_verification_source'] = source
+                return
+            last_result = 'another window/activity has focus'
+        except subprocess.TimeoutExpired:
+            last_result = 'ADB foreground query timed out'
+        except RuntimeError as exc:
+            last_result = str(exc)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.5, remaining))
+    raise RuntimeError(f'Activity launch could not be verified within {timeout}s on {serial}: '
+                       f'{last_result}. Check the emulator for a lock screen, system dialog, '
+                       'or an unresponsive app. If the emulator is stuck, cold boot it and retry. '
+                       'See launch.json for command evidence.')
 
 
 def hello_world_verified(xml, package):
@@ -214,19 +264,7 @@ def launch(root, requested=None, timeout=180):
         if 'Success' not in result:
             raise RuntimeError('APK installation did not report Success: ' + result)
         runner.device(serial, 'shell', 'am', 'force-stop', APP_ID)
-        result = runner.device(serial, 'shell', 'am', 'start', '-W', '-n', f'{APP_ID}/{ACTIVITY}')
-        if re.search(r'(^|\n)\s*(Error|Exception)', result) or 'Status: ok' not in result:
-            raise RuntimeError('Activity launch failed: ' + result)
-        # Wait for a rendered foreground activity, then capture evidence from that same serial.
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            focused, source = foreground_app(runner, serial, APP_ID, ACTIVITY)
-            if focused:
-                evidence['foreground_verification_source'] = source
-                break
-            time.sleep(0.5)
-        else:
-            raise RuntimeError('Launched activity did not become foreground. Check the emulator for a lock screen or system dialog; foreground dumps are in launch.json.')
+        start_activity(runner, serial, evidence, timeout=min(60, timeout))
         evidence['launch_verified'] = True
         remote = '/sdcard/cross-native-ui.xml'
         runner.device(serial, 'shell', 'rm', '-f', remote)

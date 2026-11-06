@@ -93,3 +93,11 @@ Foreground verification reads the full window dump and matches both application
 ID and activity class exactly. If window focus fields are unavailable, it checks
 the top resumed activity; another focused window or a lock screen is not treated
 as success. `launch.json` records which source verified foreground identity.
+
+Activity launch uses one `am start -W` request with up to 30 seconds for its
+response, then requires exact foreground package/activity evidence within a
+shared 60-second readiness budget. If the wait command times out, the runner
+checks the device instead of resending the launch intent or assuming success.
+Foreground queries retry transient timeouts, capped to the remaining budget;
+explicit activity-start errors still fail immediately. A persistently stalled
+emulator fails with recovery guidance and command evidence in launch.json.

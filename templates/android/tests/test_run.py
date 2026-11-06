@@ -169,6 +169,75 @@ class SelectionTests(unittest.TestCase):
         self.assertIsNone(run.foreground_matches(historical, 'com.example.app', run.ACTIVITY,
                                                  ('topResumedActivity', 'mResumedActivity')))
 
+    def start_runner(self, clock, window_results, start_result=None):
+        calls = []
+        results = iter(window_results)
+        class Fake:
+            def device(self, serial, *args, timeout):
+                calls.append((serial, args, timeout))
+                if 'start' in args:
+                    if start_result is not None:
+                        return start_result
+                    clock[0] += timeout
+                    raise subprocess.TimeoutExpired('adb am start', timeout, output=b'Starting: Intent')
+                result = next(results)
+                if isinstance(result, Exception):
+                    clock[0] += timeout
+                    raise result
+                return result
+        return Fake(), calls
+
+    def test_start_timeout_accepts_only_verified_foreground(self):
+        clock = [0.0]
+        runner, calls = self.start_runner(clock, ['mCurrentFocus=Window{a u0 com.example.app/dev.crossnative.app.MainActivity}'])
+        evidence = {}
+        with patch.object(run, 'APP_ID', 'com.example.app'), \
+                patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]):
+            run.start_activity(runner, 'emulator-5554', evidence)
+        self.assertEqual(evidence['start_command_status'], 'timed_out')
+        self.assertEqual(evidence['foreground_verification_source'], 'window')
+        self.assertTrue(all(call[0] == 'emulator-5554' for call in calls))
+        self.assertEqual(sum('start' in call[1] for call in calls), 1)
+
+    def test_start_timeout_unrelated_foreground_still_fails(self):
+        clock = [0.0]
+        runner, calls = self.start_runner(clock, ['mCurrentFocus=Window{a u0 other.app/.MainActivity}'] * 10)
+        with patch.object(run, 'APP_ID', 'com.example.app'), \
+                patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaisesRegex(RuntimeError, 'could not be verified within 32s'):
+                run.start_activity(runner, 'emulator-5554', {}, timeout=32)
+        self.assertEqual(clock[0], 32)
+        self.assertEqual(sum('start' in call[1] for call in calls), 1)
+
+    def test_foreground_queries_retry_timeouts_with_remaining_budget(self):
+        clock = [0.0]
+        runner, calls = self.start_runner(clock, [subprocess.TimeoutExpired('adb', 5),
+                                                'mCurrentFocus=Window{a u0 com.example.app/dev.crossnative.app.MainActivity}'])
+        with patch.object(run, 'APP_ID', 'com.example.app'), \
+                patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            run.start_activity(runner, 'emulator-5554', {}, timeout=38)
+        self.assertEqual([call[2] for call in calls], [30, 5, 2.5])
+
+    def test_explicit_activity_start_error_is_not_overridden(self):
+        clock = [0.0]
+        runner, calls = self.start_runner(clock, [], start_result='Error type 3\nError: Activity class does not exist')
+        with patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaisesRegex(RuntimeError, 'Activity launch failed'):
+                run.start_activity(runner, 'emulator-5554', {})
+        self.assertEqual(len(calls), 1)
+
+    def test_unresponsive_foreground_queries_fail_at_deadline(self):
+        clock = [0.0]
+        runner, calls = self.start_runner(clock, [subprocess.TimeoutExpired('adb', 5)] * 3)
+        with patch.object(run.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(run.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            with self.assertRaisesRegex(RuntimeError, 'ADB foreground query timed out'):
+                run.start_activity(runner, 'emulator-5554', {}, timeout=37)
+        self.assertEqual([call[2] for call in calls], [30, 5, 1.5])
+        self.assertEqual(clock[0], 37)
+
     def test_ui_text_must_belong_to_target_package(self):
         self.assertTrue(run.hello_world_verified('<hierarchy><node text="Hello World" package="com.example.app"/></hierarchy>', 'com.example.app'))
         self.assertFalse(run.hello_world_verified('<hierarchy><node text="Hello World" package="other.app"/></hierarchy>', 'com.example.app'))
