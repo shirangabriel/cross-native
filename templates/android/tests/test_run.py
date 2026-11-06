@@ -39,6 +39,51 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Pixel_1, Pixel_2'):
                 run.select_device(Fake(), None, None, 1)
 
+    def test_modern_window_subdump_has_no_foreground_fields(self):
+        # Reduced from the user's captured Android window-windows output.
+        captured = """WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #8 Window{a355b99 u0 com.widgetcorps.com/dev.crossnative.app.MainActivity}:
+    mActivityRecord=ActivityRecord{135332325 u0 com.widgetcorps.com/dev.crossnative.app.MainActivity t342}
+    isOnScreen=true
+  mTopFocusedDisplayId=0
+  imeInputTarget in display# 0 Window{a355b99 u0 com.widgetcorps.com/dev.crossnative.app.MainActivity}
+"""
+        self.assertIsNone(run.foreground_matches(captured, 'com.widgetcorps.com', run.ACTIVITY,
+                                                 ('mCurrentFocus', 'mFocusedApp')))
+
+    def test_full_window_dump_matches_exact_component(self):
+        text = '  mCurrentFocus=Window{a355b99 u0 com.widgetcorps.com/dev.crossnative.app.MainActivity}'
+        fields = ('mCurrentFocus', 'mFocusedApp')
+        self.assertTrue(run.foreground_matches(text, 'com.widgetcorps.com', run.ACTIVITY, fields))
+        self.assertFalse(run.foreground_matches(text, 'widgetcorps.com', run.ACTIVITY, fields))
+        self.assertFalse(run.foreground_matches(text, 'com.widgetcorps.com', 'other.Activity', fields))
+        short = 'mCurrentFocus=Window{a u0 dev.crossnative.app/.MainActivity}'
+        self.assertTrue(run.foreground_matches(short, 'dev.crossnative.app', run.ACTIVITY, fields))
+
+    def test_system_focus_cannot_be_overruled_by_resumed_target(self):
+        window = ('mCurrentFocus=Window{a u0 com.android.permissioncontroller/.GrantPermissionsActivity}\n'
+                  'mFocusedApp=ActivityRecord{b u0 com.example.app/dev.crossnative.app.MainActivity}')
+        self.assertFalse(run.foreground_matches(window, 'com.example.app', run.ACTIVITY,
+                                               ('mCurrentFocus', 'mFocusedApp')))
+        self.assertFalse(run.foreground_matches('mCurrentFocus=null', 'com.example.app', run.ACTIVITY,
+                                               ('mCurrentFocus', 'mFocusedApp')))
+
+    def test_activity_fallback_uses_resumed_record_not_history(self):
+        calls = []
+        class Fake:
+            def device(self, serial, *args):
+                calls.append((serial, args))
+                if args == ('shell', 'dumpsys', 'window'):
+                    return 'mTopFocusedDisplayId=0'
+                return ('topResumedActivity=ActivityRecord{a u0 com.example.app/dev.crossnative.app.MainActivity t1}\n'
+                        'mResumedActivity=ActivityRecord{b u0 other.app/.MainActivity t0}')
+        self.assertEqual(run.foreground_app(Fake(), 'emulator-5554', 'com.example.app', run.ACTIVITY),
+                         (True, 'activity'))
+        self.assertEqual(calls[0][1], ('shell', 'dumpsys', 'window'))
+        historical = 'Hist #0: ActivityRecord{a u0 com.example.app/dev.crossnative.app.MainActivity t1}'
+        self.assertIsNone(run.foreground_matches(historical, 'com.example.app', run.ACTIVITY,
+                                                 ('topResumedActivity', 'mResumedActivity')))
+
     def test_ui_text_must_belong_to_target_package(self):
         self.assertTrue(run.hello_world_verified('<hierarchy><node text="Hello World" package="com.example.app"/></hierarchy>', 'com.example.app'))
         self.assertFalse(run.hello_world_verified('<hierarchy><node text="Hello World" package="other.app"/></hierarchy>', 'com.example.app'))

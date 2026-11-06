@@ -121,6 +121,41 @@ def wait_boot(runner, serial, timeout):
     raise RuntimeError(f'Timed out waiting for Android boot on {serial}.')
 
 
+def foreground_matches(text, package, activity, fields):
+    """True/False for an authoritative foreground field; None if unavailable.
+
+    Do not accept a component merely because it occurs in a historical task or
+    visible-window listing. Package and normalized activity must both match.
+    Field order gives current window focus priority over focused/resumed apps.
+    """
+    for field in fields:
+        lines = re.findall(r'^\s*' + re.escape(field) + r'\s*[:=]\s*(.*)$', text, re.MULTILINE)
+        if not lines:
+            continue
+        for line in lines:
+            for found_package, found_activity in re.findall(
+                    r'(?<![A-Za-z0-9_.])([A-Za-z][A-Za-z0-9_.]*)/([A-Za-z0-9_.$]+)', line):
+                if found_activity.startswith('.'):
+                    found_activity = found_package + found_activity
+                if found_package == package and found_activity == activity:
+                    return True
+        return False
+    return None
+
+
+def foreground_app(runner, serial, package, activity):
+    # `window windows` omits display focus on recent Android releases. The full
+    # dump includes mCurrentFocus/mFocusedApp; activity state is a fallback only
+    # when those fields are unavailable, never when another window has focus.
+    window = runner.device(serial, 'shell', 'dumpsys', 'window')
+    match = foreground_matches(window, package, activity, ('mCurrentFocus', 'mFocusedApp'))
+    if match is not None:
+        return match, 'window'
+    activities = runner.device(serial, 'shell', 'dumpsys', 'activity', 'activities')
+    return (foreground_matches(activities, package, activity,
+                               ('topResumedActivity', 'mResumedActivity')) is True, 'activity')
+
+
 def hello_world_verified(xml, package):
     tree = ET.fromstring(xml)
     return any(node.get('package') == package and node.get('text') == 'Hello World'
@@ -156,13 +191,13 @@ def launch(root, requested=None, timeout=180):
         # Wait for a rendered foreground activity, then capture evidence from that same serial.
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            focused = runner.device(serial, 'shell', 'dumpsys', 'window', 'windows')
-            if any(APP_ID + '/' in line and ('mCurrentFocus' in line or 'mFocusedApp' in line)
-                   for line in focused.splitlines()):
+            focused, source = foreground_app(runner, serial, APP_ID, ACTIVITY)
+            if focused:
+                evidence['foreground_verification_source'] = source
                 break
             time.sleep(0.5)
         else:
-            raise RuntimeError('Launched app did not become the focused window.')
+            raise RuntimeError('Launched activity did not become foreground. Check the emulator for a lock screen or system dialog; foreground dumps are in launch.json.')
         evidence['launch_verified'] = True
         remote = '/sdcard/cross-native-ui.xml'
         runner.device(serial, 'shell', 'rm', '-f', remote)

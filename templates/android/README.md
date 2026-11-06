@@ -84,3 +84,8 @@ start of every attempt so a failure cannot leave an old successful report.
 Run focused tests with `python3 -m unittest discover -s tests -v` from this folder.
 These use mocks; no emulator or model session is started. Hot reload is not
 implemented: rebuild, install, and relaunch resets the app process.
+
+Foreground verification reads the full window dump and matches both application
+ID and activity class exactly. If window focus fields are unavailable, it checks
+the top resumed activity; another focused window or a lock screen is not treated
+as success. `launch.json` records which source verified foreground identity.
