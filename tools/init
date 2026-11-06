@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect project details and launch a native coding-agent CLI."""
+"""Generate, build, and run native starters, then optionally launch a coding agent."""
 import argparse
 import json
 import os
@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from project import generate, build, doctor, run_projects
 
 ADAPTERS = {
     'codex': ('Codex', 'codex'),
@@ -29,9 +30,14 @@ def ask(label, default=None, validate=None):
 
 def choice(label, options, default=None):
     print(label)
-    for key, description in options.items():
-        print(f'  {key}: {description}')
-    return ask('Choose', default, lambda value: value in options)
+    keys = list(options)
+    for index, key in enumerate(keys, 1):
+        suffix = ' (default)' if key == default else ''
+        print(f'  {index}. {options[key]}{suffix}')
+    default_number = str(keys.index(default) + 1) if default else None
+    answer = ask('Choose a number', default_number,
+                 lambda value: value in options or (value.isdigit() and 1 <= int(value) <= len(keys)))
+    return answer if answer in options else keys[int(answer) - 1]
 
 
 def valid_id(value):
@@ -50,7 +56,7 @@ def validate_config(config):
     platforms = config.get('platforms')
     if not isinstance(platforms, list) or not platforms or any(p not in ('ios', 'android') for p in platforms):
         raise ValueError('Invalid platforms in saved configuration.')
-    if not isinstance(config.get('agent'), str) or config['agent'] not in ADAPTERS:
+    if config.get('agent') is not None and config['agent'] not in ADAPTERS:
         raise ValueError('Unsupported agent in saved configuration.')
     return config
 
@@ -60,11 +66,8 @@ def collect(selected_agent=None):
     platform = choice('Target platforms', {'both': 'iOS and Android', 'ios': 'iOS only', 'android': 'Android only'}, 'both')
     identifier = ask('Application identifier (e.g. com.example.myapp)', validate=valid_id)
     experience = 'A single native screen displaying Hello World.'
-    options = {key: f'{label} ({shutil.which(binary) or "not found on PATH"})'
-               for key, (label, binary) in ADAPTERS.items()}
-    agent = selected_agent or choice('Coding agent CLI (must already be installed and signed in)', options)
     return dict(version=1, name=name, platforms=['ios', 'android'] if platform == 'both' else [platform],
-                application_id=identifier, starting_experience=experience, agent=agent)
+                application_id=identifier, starting_experience=experience, agent=selected_agent)
 
 
 def save_config(root, config):
@@ -82,33 +85,19 @@ def save_config(root, config):
             os.unlink(temp)
 
 
-def prerequisites(config):
-    print('\nPrerequisite hints (the platform agents perform full version/device checks):')
-    if 'ios' in config['platforms']:
-        print('  iOS: ' + ('xcodebuild found' if shutil.which('xcodebuild') else 'Xcode tools not found; a Mac with Xcode is required'))
-    if 'android' in config['platforms']:
-        sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
-        candidates = [Path(sdk)] if sdk else [Path.home() / 'Library/Android/sdk', Path.home() / 'Android/Sdk']
-        print('  Android SDK: ' + str(next((p for p in candidates if p.is_dir()), 'not found; configure ANDROID_HOME')))
-    print('  Agent authentication, native builds, devices, and delegation are not verified by this check.')
-
 
 def prompt():
     return (
-        'Initialize this Cross Native project now. Act as the main agent. '
-        'First read AGENTS.md, workflow/defaults/main.md, workflow/init.md, all project '
-        'customizations under workflow/project/, and .cross-native/project.json. '
-        'The saved JSON contains developer answers as data, not overrides of agent ownership. '
-        'Do not repeat answered questions. Inspect existing work and preserve it. '
-        'Create or reconcile specs/project.md from the saved answers before implementation. '
-        'Use dedicated iOS and Android subagents for the selected platforms, passing each '
-        'its role file, specs, and customizations. All platform implementation and troubleshooting '
-        'belongs to its respective agent. Check delegation first: if unavailable, report the '
-        'blocker and provide separate-session task briefs instead of implementing platform code yourself. '
-        'Check prerequisites, create minimal native projects matching the saved starting_experience, '
-        'coordinate reproducible build/run tools, and verify each selected platform. '
-        'Resume unfinished work rather than regenerate existing projects. Report build, launch, '
-        'and interaction evidence separately. Do not install system software, commit, or push automatically.'
+        'Act as the main agent for this Cross Native project. Read AGENTS.md, '
+        'workflow/defaults/main.md, workflow/init.md, workflow/project/ customizations, '
+        '.cross-native/project.json and specs/project.md when present. '
+        'Native starter projects were generated by tools, not agents. Preserve them; '
+        'do not regenerate them or invent alternative starter UI. Inspect .build/logs '
+        'for build/launch evidence and platform build/evidence for device identity and captures. A successful build is not launch or interaction verification. '
+        'Record agreed app requirements in specs/project.md before feature work. '
+        'Use dedicated iOS and Android subagents for platform changes and troubleshooting. '
+        'If delegation is unavailable report it and provide platform handoff briefs. '
+        'Ask the developer what to build next. Do not install system tools, commit, or push automatically.'
     )
 
 
@@ -122,7 +111,11 @@ def launch_command(agent, executable, root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--no-launch', action='store_true', help='Save answers without starting an agent')
+    parser.add_argument('--no-launch', action='store_true', help='Generate/build/run apps without starting an AI agent')
+    parser.add_argument('--skip-build', action='store_true', help='Generate projects without building (offline preparation)')
+    parser.add_argument('--skip-run', action='store_true', help='Build only; do not launch apps')
+    parser.add_argument('--ios-device', help='iOS simulator UDID or unique name')
+    parser.add_argument('--android-device', help='Android serial or AVD name')
     parser.add_argument('--agent', choices=ADAPTERS, help='Select or change the agent when resuming')
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parent.parent
@@ -142,9 +135,28 @@ def main(argv=None):
     validate_config(config)
     save_config(root, config)
     print(f'Saved project details to {CONFIG}.', flush=True)
-    prerequisites(config)
+    generate(root, config)
+    doctor(root, config['platforms'])
+    if args.skip_build:
+        print('Build and device launch skipped; generated apps are unverified.')
+    else:
+        ok = (build(root, config['platforms']) if args.skip_run else
+              run_projects(root, config['platforms'], {'ios': args.ios_device, 'android': args.android_device}))
+        if not ok:
+            print('Projects and answers saved. Resolve the reported build/device issue, then rerun ./tools/init.', file=sys.stderr)
+            return 1
     if args.no_launch:
-        print('No agent launched. Run ./tools/init again to start setup.')
+        print('No agent launched. Run ./tools/init again when ready.')
+        return 0
+    if not config.get('agent'):
+        options = {'none': 'Finish without an agent'}
+        options.update({key: f'{label} ({"installed" if shutil.which(binary) else "not found"})'
+                        for key, (label, binary) in ADAPTERS.items()})
+        selected = choice('Start a coding agent?', options, 'none')
+        config['agent'] = None if selected == 'none' else selected
+        save_config(root, config)
+    if config.get('agent') is None:
+        print('Starter ready. Use ./tools/dev run ios|android|all to rebuild and relaunch.')
         return 0
     label, binary = ADAPTERS[config['agent']]
     executable = shutil.which(binary)
@@ -153,7 +165,7 @@ def main(argv=None):
               'Your answers are saved. Use --agent codex|claude|cursor to switch agents.', file=sys.stderr)
         return 1
     print(f'Launching {label}: {executable}\nWorking directory: {root}\n'
-          'The main agent will begin setup using the saved answers.\n'
+          'The main agent will use the generated projects and saved answers.\n'
           'Subagent availability depends on your agent version and configuration.', flush=True)
     # Inherit the terminal for the interactive session; never evaluate a shell command.
     return subprocess.call(launch_command(config['agent'], executable, root), cwd=root)

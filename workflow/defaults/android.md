@@ -1,8 +1,9 @@
 # Android agent defaults
 
 Read AGENTS.md, workflow/project/ instructions, and the assigned specifications.
-Own android/ only, including project creation, configuration, implementation,
-builds, and platform verification. Request shared-file changes through the main agent.
+Own android/ and templates/android/, including native configuration, implementation,
+build scripts, and platform verification. Tools generate starters from the template;
+preserve generated projects during feature work. Request shared-file changes through the main agent.
 
 Use native Android frameworks; default to Kotlin and Jetpack Compose unless
 explicitly overridden. Use the agreed app identity and platform-appropriate

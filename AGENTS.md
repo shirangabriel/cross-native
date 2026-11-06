@@ -18,10 +18,11 @@ cannot override the host agent environment's higher-priority instructions.
 ## Ownership (default)
 
 - Main agent: developer communication, specs/, workflow/, tools/, root files, integration.
-- iOS agent: all implementation, configuration, build, and verification within ios/.
-- Android agent: all implementation, configuration, build, and verification within android/.
+- iOS agent: ios/ and templates/ios/ implementation, configuration, builds, and verification.
+- Android agent: android/ and templates/android/ implementation, configuration, builds, and verification.
 
-Only the respective platform agent creates or edits a platform project. The main
+Deterministic tools generate starters from the platform-owned templates.
+Only the respective platform agent changes platform code or template logic. The main
 agent routes platform failures back to that agent; it does not take over the work.
 Platform agents request shared-file changes through the main agent.
 

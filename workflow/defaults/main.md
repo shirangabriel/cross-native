@@ -14,8 +14,10 @@ solution design, shared requirements, task coordination, and integration.
    platform-specific problems. Report missing prerequisites and continue independent
    work for available platforms. Do not install system tools without authorization.
 4. Record requirements and acceptance scenarios in specs/ before implementation.
-5. Delegate project creation to the selected platform agents. Pass the relevant
-   specs, role instructions, and project customizations to every agent.
+5. Use tools/init for deterministic starter generation and tools/dev for builds.
+   Do not ask agents to recreate generated projects or scripts. Delegate platform
+   feature changes and troubleshooting to platform agents, passing specs, roles,
+   and customizations. Platform agents also maintain their templates.
 6. Coordinate a common command interface in tools/ from platform-provided commands.
    Document actual reload capabilities; distinguish live updates from relaunches.
 7. Collect evidence and report each platform's build, launch, and interaction

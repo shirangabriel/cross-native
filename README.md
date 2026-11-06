@@ -2,14 +2,14 @@
 
 One conversation. Native apps.
 
-Build native iOS and Android apps with a main agent coordinating dedicated
-platform agents. Agents handle decisions and implementation; tools handle
-repeatable tasks.
+Create native iOS and Android starters from reusable templates, then develop
+through a main agent and dedicated platform agents. Tools handle setup and builds;
+agents handle product decisions and implementation.
 
 ## Quick start
 
-Requires Python 3.9+ and an installed, authenticated coding-agent CLI:
-**Codex**, **Claude Code**, or **Cursor Agent**.
+Requires Python 3.9+. iOS builds require macOS and Xcode; Android builds require
+Java and Android SDK tooling. Initial dependency downloads need network access.
 
 ```sh
 git clone https://github.com/shirangabriel/cross-native.git my-app
@@ -17,19 +17,20 @@ cd my-app
 ./tools/init
 ```
 
-Answer questions about your app name, platforms, and application identifier.
-New projects start with a single native screen displaying Hello World.
-Choose an agent; Cross Native saves your answers and launches it in the project
-directory to coordinate native setup. Delegation depends on your agent environment.
+Enter your app name, platforms, and application identifier. Cross Native generates
+one centered Hello World screen per platform, builds, and launches without AI. After success,
+optionally start an installed, authenticated Codex, Claude Code, or Cursor Agent CLI.
 
 ```sh
-./tools/init --no-launch       # Save answers without launching
-./tools/init --agent claude    # Resume setup with a different agent
+./tools/init --no-launch       # Generate, build, and run without an agent
+./tools/init --skip-build      # Generate only; skip native builds
+./tools/dev doctor            # Check tool presence
+./tools/dev run all           # Rebuild and launch selected platforms
+./tools/dev run ios           # Run one platform
 ```
 
-Native projects and build/run commands are created during agent-led setup.
-iOS requires macOS and Xcode; Android requires Java and Android SDK tooling.
-Point `origin` at your own repository before pushing your app.
+Reruns preserve generated projects. Use `--skip-run` for build-only initialization.
+Device evidence is saved under each platform’s `build/evidence/`. Point `origin` at your own repository before pushing your app.
 
 ## Documentation
 
@@ -37,4 +38,3 @@ Point `origin` at your own repository before pushing your app.
 - [Initialization workflow](workflow/init.md)
 - [Tools and tests](tools/README.md)
 - [Project customization](workflow/project/README.md)
-- [Product specifications](specs/README.md)

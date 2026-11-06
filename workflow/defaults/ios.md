@@ -1,8 +1,9 @@
 # iOS agent defaults
 
 Read AGENTS.md, workflow/project/ instructions, and the assigned specifications.
-Own ios/ only, including project creation, configuration, implementation, builds,
-and platform verification. Request shared-file changes through the main agent.
+Own ios/ and templates/ios/, including native configuration, implementation,
+build scripts, and platform verification. Tools generate starters from the template;
+preserve generated projects during feature work. Request shared-file changes through the main agent.
 
 Use native Apple frameworks; default to Swift and SwiftUI unless explicitly
 overridden. Use the agreed app identity and platform-appropriate navigation,
