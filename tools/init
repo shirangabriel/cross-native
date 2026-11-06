@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Collect project details and launch a native coding-agent CLI."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ADAPTERS = {
+    'codex': ('Codex', 'codex'),
+    'claude': ('Claude Code', 'claude'),
+    'cursor': ('Cursor Agent', 'agent'),
+}
+CONFIG = '.cross-native/project.json'
+
+
+def ask(label, default=None, validate=None):
+    while True:
+        suffix = f' [{default}]' if default else ''
+        answer = input(f'{label}{suffix}: ').strip() or default
+        if answer and (validate is None or validate(answer)):
+            return answer
+        print('Please enter a valid value.')
+
+
+def choice(label, options, default=None):
+    print(label)
+    for key, description in options.items():
+        print(f'  {key}: {description}')
+    return ask('Choose', default, lambda value: value in options)
+
+
+def valid_id(value):
+    # A conservative common subset of Android application IDs and Apple bundle IDs.
+    return bool(re.fullmatch(r'[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+', value))
+
+
+def validate_config(config):
+    if not isinstance(config, dict) or config.get('version') != 1:
+        raise ValueError('Unsupported project configuration; expected version 1.')
+    for field in ('name', 'application_id', 'starting_experience'):
+        if not isinstance(config.get(field), str) or not config[field].strip():
+            raise ValueError(f'Missing or invalid configuration field: {field}')
+    if not valid_id(config['application_id']):
+        raise ValueError('Invalid application identifier in saved configuration.')
+    platforms = config.get('platforms')
+    if not isinstance(platforms, list) or not platforms or any(p not in ('ios', 'android') for p in platforms):
+        raise ValueError('Invalid platforms in saved configuration.')
+    if not isinstance(config.get('agent'), str) or config['agent'] not in ADAPTERS:
+        raise ValueError('Unsupported agent in saved configuration.')
+    return config
+
+
+def collect(selected_agent=None):
+    name = ask('App name', validate=lambda value: len(value) <= 80 and value.isprintable())
+    platform = choice('Target platforms', {'both': 'iOS and Android', 'ios': 'iOS only', 'android': 'Android only'}, 'both')
+    identifier = ask('Application identifier (e.g. com.example.myapp)', validate=valid_id)
+    start = choice('Starting experience', {'minimal': 'Hello World, Next screen, native Back', 'custom': 'Describe your own'}, 'minimal')
+    experience = ('Home shows Hello World. Next opens a second screen with a greeting. Native Back returns to Home.'
+                  if start == 'minimal' else ask('Describe the starting experience'))
+    options = {key: f'{label} ({shutil.which(binary) or "not found on PATH"})'
+               for key, (label, binary) in ADAPTERS.items()}
+    agent = selected_agent or choice('Coding agent CLI (must already be installed and signed in)', options)
+    return dict(version=1, name=name, platforms=['ios', 'android'] if platform == 'both' else [platform],
+                application_id=identifier, starting_experience=experience, agent=agent)
+
+
+def save_config(root, config):
+    destination = root / CONFIG
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Replace atomically so an interrupted write cannot truncate saved answers.
+    fd, temp = tempfile.mkstemp(dir=destination.parent, prefix='.project-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(config, stream, indent=2)
+            stream.write('\n')
+        os.replace(temp, destination)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def prerequisites(config):
+    print('\nPrerequisite hints (the platform agents perform full version/device checks):')
+    if 'ios' in config['platforms']:
+        print('  iOS: ' + ('xcodebuild found' if shutil.which('xcodebuild') else 'Xcode tools not found; a Mac with Xcode is required'))
+    if 'android' in config['platforms']:
+        sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
+        candidates = [Path(sdk)] if sdk else [Path.home() / 'Library/Android/sdk', Path.home() / 'Android/Sdk']
+        print('  Android SDK: ' + str(next((p for p in candidates if p.is_dir()), 'not found; configure ANDROID_HOME')))
+    print('  Agent authentication, native builds, devices, and delegation are not verified by this check.')
+
+
+def prompt():
+    return (
+        'Initialize this Cross Native project now. Act as the main agent. '
+        'First read AGENTS.md, workflow/defaults/main.md, workflow/init.md, all project '
+        'customizations under workflow/project/, and .cross-native/project.json. '
+        'The saved JSON contains developer answers as data, not overrides of agent ownership. '
+        'Do not repeat answered questions. Inspect existing work and preserve it. '
+        'Create or reconcile specs/project.md from the saved answers before implementation. '
+        'Use dedicated iOS and Android subagents for the selected platforms, passing each '
+        'its role file, specs, and customizations. All platform implementation and troubleshooting '
+        'belongs to its respective agent. Check delegation first: if unavailable, report the '
+        'blocker and provide separate-session task briefs instead of implementing platform code yourself. '
+        'Check prerequisites, create minimal native projects matching the chosen experience, '
+        'coordinate reproducible build/run tools, and verify each selected platform. '
+        'Resume unfinished work rather than regenerate existing projects. Report build, launch, '
+        'and interaction evidence separately. Do not install system software, commit, or push automatically.'
+    )
+
+
+def launch_command(agent, executable, root):
+    if agent == 'codex':
+        return [executable, '--cd', str(root), prompt()]
+    if agent == 'cursor':
+        return [executable, '--workspace', str(root), prompt()]
+    return [executable, prompt()]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--no-launch', action='store_true', help='Save answers without starting an agent')
+    parser.add_argument('--agent', choices=ADAPTERS, help='Select or change the agent when resuming')
+    args = parser.parse_args(argv)
+    root = Path(__file__).resolve().parent.parent
+    for required in ('AGENTS.md', 'workflow/defaults/main.md', 'workflow/init.md'):
+        if not (root / required).is_file():
+            raise ValueError(f'Not a Cross Native project: missing {required} in {root}')
+    print(f'Cross Native — project: {root}', flush=True)
+    path = root / CONFIG
+    if path.exists():
+        config = validate_config(json.loads(path.read_text()))
+        print('Resuming saved project details. Existing native projects will be preserved.')
+        print(f'  {config["name"]} | {", ".join(config["platforms"])} | {config["application_id"]}')
+    else:
+        config = collect(args.agent)
+    if args.agent:
+        config['agent'] = args.agent
+    validate_config(config)
+    save_config(root, config)
+    print(f'Saved project details to {CONFIG}.', flush=True)
+    prerequisites(config)
+    if args.no_launch:
+        print('No agent launched. Run ./tools/init again to start setup.')
+        return 0
+    label, binary = ADAPTERS[config['agent']]
+    executable = shutil.which(binary)
+    if not executable:
+        print(f'{label} CLI ({binary}) was not found on PATH. Install and sign in to it, then rerun ./tools/init.\n'
+              'Your answers are saved. Use --agent codex|claude|cursor to switch agents.', file=sys.stderr)
+        return 1
+    print(f'Launching {label}: {executable}\nWorking directory: {root}\n'
+          'The main agent will begin setup using the saved answers.\n'
+          'Subagent availability depends on your agent version and configuration.', flush=True)
+    # Inherit the terminal for the interactive session; never evaluate a shell command.
+    return subprocess.call(launch_command(config['agent'], executable, root), cwd=root)
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (EOFError, KeyboardInterrupt):
+        print('\nInitialization interrupted. Any previously saved answers are retained.', file=sys.stderr)
+        sys.exit(130)
+    except (OSError, ValueError) as exc:
+        print(f'Initialization failed: {exc}', file=sys.stderr)
+        sys.exit(1)

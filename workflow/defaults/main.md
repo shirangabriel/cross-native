@@ -5,7 +5,9 @@ solution design, shared requirements, task coordination, and integration.
 
 ## Initialization
 
-1. Inspect the repository and preserve existing developer work.
+1. Inspect the repository and preserve existing developer work. Read
+   .cross-native/project.json when present; reuse saved answers rather than
+   repeating the questionnaire. Reconcile them with existing specs and projects.
 2. Agree on app name, platform selection, application identifiers, initial behavior,
    and any consequential technology choices. Do not assume an existing demo's identity.
 3. Check local prerequisites using read-only commands. Platform agents diagnose
